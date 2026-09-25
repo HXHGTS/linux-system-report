@@ -1,0 +1,11 @@
+name: smoke-test
+on: [push, pull_request]
+jobs:
+  smoke:
+    strategy:
+      matrix: { os: [ubuntu-22.04, ubuntu-24.04] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n bin/system-report.sh
+      - run: bash tests/test-system-report.sh

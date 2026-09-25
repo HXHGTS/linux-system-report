@@ -1,0 +1,7 @@
+*.log
+report*.txt
+system-report*.txt
+.env
+*.key
+*.pem
+credentials*
