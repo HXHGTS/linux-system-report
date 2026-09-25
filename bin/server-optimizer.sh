@@ -36,12 +36,28 @@ print_extra_categories() {
   section '资源限制（可自动候选）'
   printf 'file-max：%s；当前打开文件限制：%s；pid_max：%s；threads-max：%s\n' "$(sysv fs/file-max)" "$(ulimit -n 2>/dev/null || printf 不可用)" "$(sysv kernel/pid_max)" "$(sysv kernel/threads-max)"
   printf '建议：连接数较高时评估文件句柄和 systemd LimitNOFILE；当前版本只应用 sysctl，limits/systemd 仅给出建议。\n'
-  section 'Swap 与内存（可自动候选）'
-  printf 'Swap 总量：%s；可用：%s；zram：%s；zswap：%s\n' "$(memv SwapTotal)" "$(memv SwapFree)" "$([ -d /sys/block/zram0 ] && printf 已检测到 || printf 未检测到)" "$(readv /sys/module/zswap/parameters/enabled)"
-  printf '建议：无 Swap 时先评估业务 OOM 风险；创建/删除 Swap 或 zram 仅建议，不自动执行。\n'
+  section '页面文件 / Swap（仅建议）'
+  swap_total=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null); swap_free=$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null); swap_total=${swap_total:-0}; swap_free=${swap_free:-0}
+  if [ "$swap_total" -gt 0 ] 2>/dev/null; then swap_used=$((swap_total-swap_free)); printf 'Swap 总量：%s；已用：%s；使用率：%s%%\n' "$(memv SwapTotal)" "$(memv SwapCached)" "$(awk -v u="$swap_used" -v t="$swap_total" 'BEGIN{printf "%.1f",u*100/t}')"; else printf 'Swap：未启用（需要评估 OOM 风险）\n'; fi
+  if [ -r /proc/swaps ]; then printf '活动 Swap 条目：%s\n' "$(awk 'NR>1{n++}END{print n+0}' /proc/swaps)"; awk 'NR>1{printf "条目%d：类型=%s 大小=%s 已用=%s 优先级=%s\n",NR-1,$2,$3,$4,$5}' /proc/swaps; else printf '活动 Swap：不可用\n'; fi
+  printf 'zram：%s；zswap：%s；vm.swappiness：%s；vm.page-cluster：%s\n' "$([ -d /sys/block/zram0 ] && printf 已检测到 || printf 未检测到)" "$(readv /sys/module/zswap/parameters/enabled)" "$(sysv vm/swappiness)" "$(sysv vm/page-cluster)"
+  if [ -r /etc/fstab ]; then printf 'fstab 中 Swap 条目：%s\n' "$(awk '$3=="swap"{n++}END{print n+0}' /etc/fstab)"; else printf 'fstab：不可用\n'; fi
+  printf '建议：根据 MemAvailable、Committed_AS/CommitLimit、Swap 使用率和内存 PSI 评估；创建、删除、启停 Swap/zram 仅建议，不自动执行。\n'
   section '磁盘与文件系统（仅建议）'
   if have df; then df -P -h 2>/dev/null | awk 'NR>1{printf "挂载点%d：总量=%s 已用=%s 可用=%s 使用率=%s\n",NR-1,$2,$3,$4,$5}'; else printf '无法读取磁盘使用率。\n'; fi
   printf '建议：高使用率或 inode 紧张时先清理/扩容评估；脚本不执行 rm、fsck、resize、分区或挂载变更。\n'
+  section '/etc/security 资源限制（仅建议）'
+  sec_count=0; sec_valid=0; sec_conflicts=0
+  if [ -r /etc/security/limits.conf ]; then sec_count=$((sec_count+1)); fi
+  if [ -d /etc/security/limits.d ]; then for sf in /etc/security/limits.d/*.conf; do [ -f "$sf" ] || continue; sec_count=$((sec_count+1)); done; fi
+  if [ "$sec_count" -gt 0 ]; then
+    for sf in /etc/security/limits.conf /etc/security/limits.d/*.conf; do [ -r "$sf" ] || continue; while read -r domain type item value extra; do case "$domain" in ''|\#*) continue;; esac; case "$item" in nofile|nproc|memlock|core|stack|fsize|as|locks|maxlogins|sigpending) sec_valid=$((sec_valid+1)); case "$value" in ''|*[!0-9unlimited]*) sec_conflicts=$((sec_conflicts+1));; esac;; esac; done < "$sf"; done
+  fi
+  printf '配置文件数量：%s；重点限制条目：%s；格式/数值问题：%s\n' "$sec_count" "$sec_valid" "$sec_conflicts"
+  printf '当前会话 nofile：%s；nproc：%s；memlock：%s\n' "$(ulimit -n 2>/dev/null || printf 不可用)" "$(ulimit -u 2>/dev/null || printf 不可用)" "$(ulimit -l 2>/dev/null || printf 不可用)"
+  pam_status='未检测'; if grep -Rqs 'pam_limits\.so' /etc/pam.d 2>/dev/null; then pam_status='已检测到 pam_limits.so'; elif [ -d /etc/pam.d ]; then pam_status='未检测到 pam_limits.so'; fi
+  printf 'PAM limits：%s\n' "$pam_status"
+  printf '建议：重点检查 nofile/nproc 的 soft/hard 是否合理、重复覆盖和 PAM 是否加载；修改后通常只对新登录会话生效，limits/PAM/systemd 限制仅建议，不自动修改。\n'
   section '服务与监听（仅建议）'
   if have systemctl; then printf '失败服务数：%s\n' "$(systemctl --failed --no-legend 2>/dev/null | wc -l)"; else printf 'systemd：不可用或非 systemd 系统。\n'; fi
   if have ss; then printf '监听 TCP：%s；监听 UDP：%s\n' "$(ss -lntH 2>/dev/null | wc -l)" "$(ss -lnuH 2>/dev/null | wc -l)"; else printf '无法统计监听端口（缺少 ss）。\n'; fi
@@ -55,6 +71,7 @@ print_extra_categories() {
   printf 'SSH/防火墙/安全策略：仅建议人工审查，不自动安装、升级、删除软件或修改访问控制。\n'
 }
 sysv() { [ -r "/proc/sys/$1" ] && cat "/proc/sys/$1" 2>/dev/null || printf '不可用'; }
+readv() { [ -r "$1" ] && sed -n '1p' "$1" 2>/dev/null || printf '不可用'; }
 memv() { awk -v k="$1" '$1==k":" {printf "%.2f MiB",$2/1024;ok=1} END{if(!ok)print "不可用"}' /proc/meminfo 2>/dev/null; }
 print_extra_categories
 # 仅处理固定 allowlist；候选值保守，需用户确认后才应用。
