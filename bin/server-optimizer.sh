@@ -27,6 +27,36 @@ add_candidate() { key=$1; target=$2; reason=$3; current=$(getv "${key//./\/}"); 
 TMP=$(mktemp -d 2>/dev/null) || exit 1
 cleanup() { rm -rf "$TMP"; }; trap cleanup EXIT HUP INT TERM
 PLAN="$TMP/plan"; : > "$PLAN"
+# 非内核类别先检测并给出建议；只有固定 sysctl allowlist 会进入自动应用计划。
+print_extra_categories() {
+  section() { printf '\n【%s】\n' "$1"; }
+  section '网络链路与队列（仅建议）'
+  if have ip; then printf '默认路由：%s；接口数：%s；MTU 最大值：%s\n' "$(ip route 2>/dev/null | awk '$1=="default"{n++}END{print n+0}')" "$(ip -o link 2>/dev/null | awk 'END{print NR}')" "$(ip -o link 2>/dev/null | awk -F 'mtu ' 'NF>1{split($2,a," ");if(a[1]>m)m=a[1]}END{print m+0}')"; else printf '无法读取网络接口（缺少 ip）。\n'; fi
+  printf '建议：先采样 RTT、抖动、丢包、MTU 和 qdisc；脚本不自动修改路由、防火墙、MTU 或拥塞控制。\n'
+  section '资源限制（可自动候选）'
+  printf 'file-max：%s；当前打开文件限制：%s；pid_max：%s；threads-max：%s\n' "$(sysv fs/file-max)" "$(ulimit -n 2>/dev/null || printf 不可用)" "$(sysv kernel/pid_max)" "$(sysv kernel/threads-max)"
+  printf '建议：连接数较高时评估文件句柄和 systemd LimitNOFILE；当前版本只应用 sysctl，limits/systemd 仅给出建议。\n'
+  section 'Swap 与内存（可自动候选）'
+  printf 'Swap 总量：%s；可用：%s；zram：%s；zswap：%s\n' "$(memv SwapTotal)" "$(memv SwapFree)" "$([ -d /sys/block/zram0 ] && printf 已检测到 || printf 未检测到)" "$(readv /sys/module/zswap/parameters/enabled)"
+  printf '建议：无 Swap 时先评估业务 OOM 风险；创建/删除 Swap 或 zram 仅建议，不自动执行。\n'
+  section '磁盘与文件系统（仅建议）'
+  if have df; then df -P -h 2>/dev/null | awk 'NR>1{printf "挂载点%d：总量=%s 已用=%s 可用=%s 使用率=%s\n",NR-1,$2,$3,$4,$5}'; else printf '无法读取磁盘使用率。\n'; fi
+  printf '建议：高使用率或 inode 紧张时先清理/扩容评估；脚本不执行 rm、fsck、resize、分区或挂载变更。\n'
+  section '服务与监听（仅建议）'
+  if have systemctl; then printf '失败服务数：%s\n' "$(systemctl --failed --no-legend 2>/dev/null | wc -l)"; else printf 'systemd：不可用或非 systemd 系统。\n'; fi
+  if have ss; then printf '监听 TCP：%s；监听 UDP：%s\n' "$(ss -lntH 2>/dev/null | wc -l)" "$(ss -lnuH 2>/dev/null | wc -l)"; else printf '无法统计监听端口（缺少 ss）。\n'; fi
+  printf '建议：停用/重启服务前必须人工确认业务影响，脚本不自动操作服务。\n'
+  section '日志、DNS 与时间（仅建议）'
+  if have journalctl; then printf '日志占用：%s\n' "$(journalctl --disk-usage 2>/dev/null | sed -E 's/.*: //' | cut -c1-80)"; else printf '日志：无法读取 journal。\n'; fi
+  printf 'DNS 配置：%s；时间同步：%s\n' "$([ -r /etc/resolv.conf ] && printf 已存在 || printf 不可用)" "$(have timedatectl && timedatectl show -p NTPSynchronized --value 2>/dev/null || printf 不可用)"
+  printf '建议：DNS、NTP、日志保留可影响联网和审计；仅生成建议，不自动改配置或清理日志。\n'
+  section '软件与安全（仅建议）'
+  if have apt-get; then printf '可更新包检查：可用（未执行联网检查）\n'; else printf 'APT：不可用或非 Debian/Ubuntu。\n'; fi
+  printf 'SSH/防火墙/安全策略：仅建议人工审查，不自动安装、升级、删除软件或修改访问控制。\n'
+}
+sysv() { [ -r "/proc/sys/$1" ] && cat "/proc/sys/$1" 2>/dev/null || printf '不可用'; }
+memv() { awk -v k="$1" '$1==k":" {printf "%.2f MiB",$2/1024;ok=1} END{if(!ok)print "不可用"}' /proc/meminfo 2>/dev/null; }
+print_extra_categories
 # 仅处理固定 allowlist；候选值保守，需用户确认后才应用。
 if [ "$PROFILE" = proxy ]; then
   add_candidate net.core.somaxconn 4096 '高并发监听场景候选；需结合实际连接数验证'
