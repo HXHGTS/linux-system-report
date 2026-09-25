@@ -45,6 +45,31 @@ chmod +x bin/system-report.sh
 ./bin/system-report.sh --json
 ```
 
+### 生成优化建议
+
+根据硬件和当前系统状态，选择服务器用途：
+
+```sh
+chmod +x bin/server-optimizer.sh
+./bin/server-optimizer.sh
+```
+
+运行时选择：
+
+```text
+1. 科学上网服务器
+2. 游戏加速器
+```
+
+也可以直接指定场景：
+
+```sh
+./bin/server-optimizer.sh --profile proxy
+./bin/server-optimizer.sh --profile game
+```
+
+该脚本默认只读，只生成中文检测摘要和候选优化建议，不执行 `sysctl`、`tc`、`iptables/nft`、`systemctl`，也不会修改 `/etc` 或网络配置。建议结合业务并发、带宽、延迟、丢包、云厂商限制和压测结果，再由管理员决定是否调整参数。
+
 默认脱敏主机名、IP、MAC、UUID、machine-id、用户路径及常见密码/token 键值。`--no-redact` 仅适合本机排障，切勿公开分享原始报告。
 
 报告面向服务器优化人员，包含 CPU/主板/BIOS、内存与提交额度、Dirty/Writeback/Slab、Swap 与 zram/zswap、vm 内核参数、PSI 内存/IO 压力、透明大页、网络队列、文件句柄限制、磁盘使用率、系统/内核、OpenSSL、IPv4/IPv6、路由和 DNS。输出是采集时快照，不直接给出调优结论；应结合业务负载、内核版本和云厂商文档评估。脚本仅读取有限的 `/etc` 文件，不读取 shadow、私钥、历史记录或应用密钥。
