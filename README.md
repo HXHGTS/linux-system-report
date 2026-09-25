@@ -4,6 +4,40 @@
 
 ## 使用
 
+### 一键运行
+
+直接从 GitHub 加载并运行最新脚本（默认输出已脱敏报告）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/system-report.sh | bash
+```
+
+没有 `curl` 时可使用 `wget`：
+
+```sh
+wget -qO- https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/system-report.sh | bash
+```
+
+> 一键命令会执行远程脚本。对生产服务器或安全要求较高的环境，建议先下载、检查内容，再运行。
+
+### 加载到本地后运行
+
+```sh
+curl -fsSLo system-report.sh https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/system-report.sh
+chmod +x system-report.sh
+./system-report.sh
+```
+
+也可以使用 `wget` 加载：
+
+```sh
+wget -O system-report.sh https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/system-report.sh
+chmod +x system-report.sh
+./system-report.sh --output report.txt
+```
+
+### 本地运行
+
 ```sh
 chmod +x bin/system-report.sh
 ./bin/system-report.sh
