@@ -47,7 +47,7 @@ chmod +x bin/system-report.sh
 
 默认脱敏主机名、IP、MAC、UUID、machine-id、用户路径及常见密码/token 键值。`--no-redact` 仅适合本机排障，切勿公开分享原始报告。
 
-报告包括 CPU/主板/BIOS、内存（MiB/GiB）、磁盘/挂载点、完整 `/etc/os-release`、完整内核版本与参数、Swap、常见 `/etc` 配置、OpenSSL、IPv4/IPv6、路由和 DNS。脚本仅读取有限的 `/etc` 文件，不读取 shadow、私钥、历史记录或应用密钥。
+报告面向服务器优化人员，包含 CPU/主板/BIOS、内存与提交额度、Dirty/Writeback/Slab、Swap 与 zram/zswap、vm 内核参数、PSI 内存/IO 压力、透明大页、网络队列、文件句柄限制、磁盘使用率、系统/内核、OpenSSL、IPv4/IPv6、路由和 DNS。输出是采集时快照，不直接给出调优结论；应结合业务负载、内核版本和云厂商文档评估。脚本仅读取有限的 `/etc` 文件，不读取 shadow、私钥、历史记录或应用密钥。
 
 ## 兼容和降级
 
