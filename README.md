@@ -45,6 +45,40 @@ chmod +x bin/system-report.sh
 ./bin/system-report.sh --json
 ```
 
+### 一键运行优化脚本
+
+以下命令会加载仓库中的最新优化脚本，并保留终端交互，因此可以选择场景、查看修改前后参数并输入 `APPLY` 确认：
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/server-optimizer.sh)
+```
+
+直接指定“科学上网服务器”场景：
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/server-optimizer.sh) --profile proxy
+```
+
+直接指定“游戏加速器”场景：
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/server-optimizer.sh) --profile game
+```
+
+需要实际应用修改时，仍必须显式加入 `--apply`，并输入 `APPLY`：
+
+```sh
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/server-optimizer.sh) --profile proxy --apply
+```
+
+没有 `curl` 时使用 `wget`：
+
+```sh
+bash <(wget -qO- https://raw.githubusercontent.com/HXHGTS/linux-system-report/main/bin/server-optimizer.sh) --profile game
+```
+
+> 一键命令会执行远程脚本。生产服务器建议先下载并检查脚本；优化应用前会先显示修改计划，备份成功且用户输入 `APPLY` 后才会修改。
+
 ### 生成优化建议
 
 根据硬件和当前系统状态，选择服务器用途：
