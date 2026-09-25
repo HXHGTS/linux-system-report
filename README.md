@@ -68,7 +68,25 @@ chmod +x bin/server-optimizer.sh
 ./bin/server-optimizer.sh --profile game
 ```
 
-该脚本默认只读，只生成中文检测摘要和候选优化建议，不执行 `sysctl`、`tc`、`iptables/nft`、`systemctl`，也不会修改 `/etc` 或网络配置。建议结合业务并发、带宽、延迟、丢包、云厂商限制和压测结果，再由管理员决定是否调整参数。
+脚本会先显示每个参数的“当前值 → 修改后值”、修改原因和影响范围，然后询问是否应用。
+
+默认是计划模式，不修改系统。确认要修改时必须在交互终端以 root 执行：
+
+```sh
+sudo ./bin/server-optimizer.sh --profile proxy --apply
+# 或
+sudo ./bin/server-optimizer.sh --profile game --apply
+```
+
+应用前会要求输入精确确认词 `APPLY`，并在 `/var/backups/server-optimizer/时间戳-PID/` 创建权限为 0700 的备份，备份专用 sysctl 配置和原始参数值。备份成功后才写入 `/etc/sysctl.d/99-server-optimizer.conf`，逐项应用并验证；失败时会尝试自动回滚。
+
+回滚示例：
+
+```sh
+sudo ./bin/server-optimizer.sh --rollback /var/backups/server-optimizer/备份目录
+```
+
+回滚同样需要 root、交互终端和输入 `ROLLBACK` 确认。脚本不会修改防火墙、路由、MTU、拥塞控制或服务配置。建议结合业务并发、带宽、延迟、丢包、云厂商限制和压测结果，再由管理员决定是否调整参数。
 
 默认脱敏主机名、IP、MAC、UUID、machine-id、用户路径及常见密码/token 键值。`--no-redact` 仅适合本机排障，切勿公开分享原始报告。
 

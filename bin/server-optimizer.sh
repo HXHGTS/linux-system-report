@@ -1,61 +1,67 @@
 #!/usr/bin/env bash
-# 根据硬件和用途生成 Linux 服务器优化建议；默认只读，不修改系统。
+# 场景化 Linux 参数优化：显示变更计划，确认后备份并应用，失败自动回滚。
 set -u
 export LC_ALL=C
-profile=''
-usage() { printf '%s\n' '用法：server-optimizer.sh [--profile proxy|game]'; }
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --profile) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; profile=$2; shift 2;;
-    -h|--help) usage; exit 0;;
-    *) printf '未知参数：%s\n' "$1" >&2; usage >&2; exit 2;;
-  esac
-done
-if [ -z "$profile" ]; then
-  printf '请选择服务器使用场景：\n1. 科学上网服务器\n2. 游戏加速器\n选择 [1-2]：'
-  read -r choice || exit 2
-  case "$choice" in 1) profile=proxy;; 2) profile=game;; *) printf '无效选择。\n' >&2; exit 2;; esac
+PROFILE=''; APPLY=0; ROLLBACK=''; DROPIN=/etc/sysctl.d/99-server-optimizer.conf
+usage() { printf '%s\n' '用法：server-optimizer.sh [--profile proxy|game] [--apply] [--rollback 备份目录]'; }
+while [ "$#" -gt 0 ]; do case "$1" in
+  --profile) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; PROFILE=$2; shift 2;;
+  --apply) APPLY=1; shift;; --rollback) [ "$#" -ge 2 ] || exit 2; ROLLBACK=$2; shift 2;;
+  -h|--help) usage; exit 0;; *) printf '未知参数：%s\n' "$1" >&2; exit 2;;
+esac; done
+if [ -n "$ROLLBACK" ]; then
+  [ "$(id -u)" -eq 0 ] || { printf '回滚需要 root。\n' >&2; exit 1; }
+  [ -t 0 ] && [ -t 1 ] || { printf '回滚必须在交互终端执行。\n' >&2; exit 1; }
+  [ -r "$ROLLBACK/manifest" ] || { printf '备份清单不存在。\n' >&2; exit 1; }
+  printf '将根据备份恢复参数和配置：%s\n请输入 ROLLBACK 继续：' "$ROLLBACK"; read -r answer || exit 1; [ "$answer" = ROLLBACK ] || { printf '已取消。\n'; exit 0; }
+  [ -r "$ROLLBACK/sysctl-values" ] || exit 1
+  while IFS='=' read -r key old; do [ -n "$key" ] || continue; sysctl -w "$key=$old" >/dev/null || { printf '恢复失败：%s\n' "$key" >&2; exit 1; }; done < "$ROLLBACK/sysctl-values"
+  if grep -q '^DROPIN_ABSENT=1$' "$ROLLBACK/manifest"; then rm -f "$DROPIN"; else cp "$ROLLBACK/dropin" "$DROPIN"; fi
+  printf '回滚完成，请重新执行采集脚本验证。\n'; exit 0
 fi
-case "$profile" in proxy|game) ;; *) printf '场景必须是 proxy 或 game。\n' >&2; exit 2;; esac
-
+if [ -z "$PROFILE" ]; then printf '请选择服务器用途：\n1. 科学上网服务器\n2. 游戏加速器\n选择 [1-2]：'; read -r c || exit 2; case "$c" in 1) PROFILE=proxy;; 2) PROFILE=game;; *) printf '无效选择。\n' >&2; exit 2;; esac; fi
+case "$PROFILE" in proxy|game) ;; *) printf '场景必须是 proxy 或 game。\n' >&2; exit 2;; esac
 have() { command -v "$1" >/dev/null 2>&1; }
-readv() { [ -r "$1" ] && sed -n '1p' "$1" 2>/dev/null || printf '不可用'; }
-sysv() { readv "/proc/sys/$1"; }
-memv() { awk -v k="$1" '$1==k":" {printf "%.2f MiB",$2/1024;ok=1} END{if(!ok)print "不可用"}' /proc/meminfo 2>/dev/null; }
-num_mem_kb() { awk -v k="$1" '$1==k":" {print $2; exit}' /proc/meminfo 2>/dev/null; }
-section() { printf '\n【%s】\n' "$1"; }
-status() { [ "$1" != '不可用' ] && printf '已检测：%s\n' "$1" || printf '无法检测：%s\n' "$2"; }
-
-cpu=$(awk -F: '/^model name/{gsub(/^ +/,"",$2);print $2;exit}' /proc/cpuinfo 2>/dev/null); [ -n "$cpu" ] || cpu='不可用'
-cores=$(awk '/^processor/{n++} END{print n+0}' /proc/cpuinfo 2>/dev/null)
-mem_total=$(num_mem_kb MemTotal); mem_available=$(num_mem_kb MemAvailable)
-[ -n "$mem_total" ] || mem_total=0; [ -n "$mem_available" ] || mem_available=0
-swap_total=$(num_mem_kb SwapTotal); swap_free=$(num_mem_kb SwapFree); [ -n "$swap_total" ] || swap_total=0; [ -n "$swap_free" ] || swap_free=0
-
-printf '服务器优化建议（只读模式）\n场景：%s\n' "$([ "$profile" = proxy ] && printf '科学上网服务器' || printf '游戏加速器')"
-printf '注意：本脚本只生成候选建议，不执行 sysctl、tc、iptables/nft、systemctl 或写入 /etc。\n'
-section '硬件与运行环境'; printf 'CPU：%s\n逻辑处理器：%s\n内存：%s\n可用内存：%s\nSwap：%s\n内核：%s\n' "$cpu" "$cores" "$(memv MemTotal)" "$(memv MemAvailable)" "$(memv SwapTotal)" "$(uname -r 2>/dev/null || printf 不可用)"
-section '当前关键观测'; printf 'vm.swappiness：%s\nvm.overcommit_memory：%s\nvm.vfs_cache_pressure：%s\nCommitted_AS：%s\nCommitLimit：%s\n' "$(sysv vm/swappiness)" "$(sysv vm/overcommit_memory)" "$(sysv vm/vfs_cache_pressure)" "$(memv Committed_AS)" "$(memv CommitLimit)"
-if [ -r /proc/pressure/memory ]; then printf '内存 PSI：'; awk 'NR==1{print $4" "$5" "$6}' /proc/pressure/memory; else printf '内存 PSI：不可用\n'; fi
-if [ -r /proc/pressure/io ]; then printf 'IO PSI：'; awk 'NR==1{print $4" "$5" "$6}' /proc/pressure/io; else printf 'IO PSI：不可用\n'; fi
-if have ip; then printf '网络接口：%s；IPv4：%s；IPv6：%s；默认路由：%s\n' "$(ip -o link 2>/dev/null | awk 'END{print NR}')" "$(ip -o -4 addr 2>/dev/null | wc -l)" "$(ip -o -6 addr 2>/dev/null | wc -l)" "$(ip -4 route 2>/dev/null | awk '$1=="default"{n++}END{print n+0}')"; else printf '网络：无法检测（缺少 ip）\n'; fi
-
-section '检测结果';
-if [ "$mem_total" -lt 1048576 ]; then printf '内存较小（低于 1 GiB），不建议盲目提高缓存、队列或并发上限。\n'; elif [ "$mem_total" -lt 4194304 ]; then printf '内存中等（1-4 GiB），建议以实测压力和 Swap 使用率为依据。\n'; else printf '内存充足（至少 4 GiB），仍需结合业务并发和 PSI 判断。\n'; fi
-if [ "$swap_total" -eq 0 ]; then printf '未检测到 Swap：内存紧张时可能触发 OOM。\n'; else printf '已配置 Swap，当前使用量约 %s。\n' "$(awk -v t="$swap_total" -v f="$swap_free" 'BEGIN{printf "%.2f MiB",(t-f)/1024}')"; fi
-
-section '建议';
-if [ "$profile" = proxy ]; then
-  printf '%s\n' '1. 连接转发：先确认是否启用 NAT/转发、实际并发、带宽、MTU 和 conntrack，再评估端口范围、文件句柄和队列上限。'
-  printf '%s\n' '2. 虚拟内存：以 MemAvailable、Committed_AS/CommitLimit、Swap 使用量和内存 PSI 判断；不要仅凭内存大小固定 swappiness 或 overcommit 值。'
-  printf '%s\n' '3. 吞吐优化：只有在持续带宽压测和 CPU/IO PSI 正常时，才评估拥塞控制、socket 缓冲和 netdev backlog；不要直接套用网上参数。'
-  printf '%s\n' '4. 安全与稳定：不要为追求吞吐关闭 syncookies、盲目扩大 conntrack 或修改 MTU；变更前记录当前值并准备回滚。'
+getv() { [ -r "/proc/sys/$1" ] && cat "/proc/sys/$1" 2>/dev/null || printf '不可用'; }
+add_candidate() { key=$1; target=$2; reason=$3; current=$(getv "${key//./\/}"); if [ "$current" = '不可用' ]; then printf '%s|%s|%s|跳过：内核不支持\n' "$key" "$current" "$reason" >> "$PLAN"; return; fi; printf '%s|%s|%s|%s\n' "$key" "$current" "$target" "$reason" >> "$PLAN"; }
+TMP=$(mktemp -d 2>/dev/null) || exit 1
+cleanup() { rm -rf "$TMP"; }; trap cleanup EXIT HUP INT TERM
+PLAN="$TMP/plan"; : > "$PLAN"
+# 仅处理固定 allowlist；候选值保守，需用户确认后才应用。
+if [ "$PROFILE" = proxy ]; then
+  add_candidate net.core.somaxconn 4096 '高并发监听场景候选；需结合实际连接数验证'
+  add_candidate net.core.netdev_max_backlog 4096 '吞吐/突发流量候选；需观察丢包和 CPU 压力'
+  add_candidate net.ipv4.tcp_max_syn_backlog 4096 'TCP 建连突发候选；不代表应长期增大'
 else
-  printf '%s\n' '1. 低延迟优先：先采样 RTT、抖动、丢包、路径和 UDP 实际流量；不要把 somaxconn、TCP backlog 或大队列当作游戏延迟优化。'
-  printf '%s\n' '2. 队列与 MTU：确认网卡、隧道、路径 MTU 和 qdisc 后再评估；以减少排队延迟为目标，不盲目增大队列。'
-  printf '%s\n' '3. CPU/内存：检查 CPU、内存和 IO PSI、软中断及 Swap；避免在压力未定位前关闭 THP 或强制切换内存策略。'
-  printf '%s\n' '4. 网络质量：使用多时段 ping/mtr/ss/ethtool 采样验证，区分服务器资源问题与线路、路由或上游拥塞问题。'
+  add_candidate net.core.somaxconn 1024 '仅保守提高监听队列；低延迟服务需压测确认'
+  add_candidate net.ipv4.tcp_syncookies 1 '保持安全默认值，不关闭 SYN 防护'
 fi
-
-section '需要人工确认'; printf '%s\n' '- 业务并发峰值、协议类型（TCP/UDP）、带宽、RTT/丢包、是否 NAT/隧道。\n- 云厂商限制、网卡队列、内核版本和当前 qdisc。\n- 任何参数修改都应先备份、分批变更、验证并保留回滚方案。'
-printf '\n结论：这是基于当前快照的候选建议，不是自动调优或性能测试结果。\n'
+printf '服务器优化变更计划\n场景：%s\n' "$([ "$PROFILE" = proxy ] && printf '科学上网服务器' || printf '游戏加速器')"
+printf '\n【当前值 → 修改后】\n'
+changes=0; : > "$TMP/changes"
+while IFS='|' read -r key current target reason; do
+  if [ "$target" = '跳过：内核不支持' ]; then printf '%-38s 当前=%s  状态=%s\n' "$key" "$current" "$target"; continue; fi
+  if [ "$current" = "$target" ]; then printf '%-38s %s → %s  保持（%s）\n' "$key" "$current" "$target" "$reason"; else printf '%-38s %s → %s  待确认（%s）\n' "$key" "$current" "$target" "$reason"; printf '%s=%s\n' "$key" "$target" >> "$TMP/changes"; changes=$((changes+1)); fi
+done < "$PLAN"
+printf '\n【应用说明】\n将修改 %s 项运行时参数，并写入专用配置：%s\n' "$changes" "$DROPIN"
+printf '应用前会创建备份；失败会尝试恢复旧值。不会修改防火墙、路由、MTU 或服务配置。\n'
+[ "$changes" -gt 0 ] || { printf '没有需要修改的参数。\n'; exit 0; }
+[ "$APPLY" -eq 1 ] || { printf '\n当前为计划模式：未修改系统。需要应用时重新执行并加入 --apply。\n'; exit 0; }
+[ "$(id -u)" -eq 0 ] || { printf '应用需要 root，未修改系统。\n' >&2; exit 1; }
+[ -t 0 ] && [ -t 1 ] || { printf '应用必须在交互终端执行，未修改系统。\n' >&2; exit 1; }
+printf '\n请确认以上修改，输入 APPLY 才会继续：'; read -r answer || exit 1; [ "$answer" = APPLY ] || { printf '已取消，未修改系统。\n'; exit 0; }
+if have flock; then exec 9>/run/lock/server-optimizer.lock; flock -n 9 || { printf '已有另一个优化任务运行。\n' >&2; exit 1; }; fi
+BACKUP_ROOT=/var/backups/server-optimizer; mkdir -p "$BACKUP_ROOT"; BACKUP="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$$"; (umask 077; mkdir "$BACKUP") || exit 1
+printf 'profile=%s\ncreated_utc=%s\n' "$PROFILE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BACKUP/manifest"
+if [ -e "$DROPIN" ]; then [ ! -L "$DROPIN" ] || { printf '拒绝覆盖符号链接：%s\n' "$DROPIN" >&2; exit 1; }; cp -p "$DROPIN" "$BACKUP/dropin" || exit 1; else printf 'DROPIN_ABSENT=1\n' >> "$BACKUP/manifest"; fi
+cp "$TMP/changes" "$BACKUP/proposed-values"; : > "$BACKUP/sysctl-values"
+while IFS='=' read -r key target; do old=$(getv "${key//./\/}"); printf '%s=%s\n' "$key" "$old" >> "$BACKUP/sysctl-values"; done < "$TMP/changes"
+chmod 600 "$BACKUP"/*; printf '备份已完成：%s\n' "$BACKUP"
+rollback_apply() { while IFS='=' read -r k v; do [ "$v" != '不可用' ] && sysctl -w "$k=$v" >/dev/null 2>&1 || true; done < "$BACKUP/sysctl-values"; if grep -q '^DROPIN_ABSENT=1$' "$BACKUP/manifest"; then rm -f "$DROPIN"; else cp "$BACKUP/dropin" "$DROPIN"; fi; }
+if ! mkdir -p "$(dirname "$DROPIN")" || ! : > "$TMP/dropin"; then rollback_apply; exit 1; fi
+printf '# server-optimizer profile=%s; review backup before rollback\n' "$PROFILE" > "$TMP/dropin"
+while IFS='=' read -r key target; do printf '%s = %s\n' "$key" "$target" >> "$TMP/dropin"; done < "$TMP/changes"
+chmod 644 "$TMP/dropin"; if ! mv "$TMP/dropin" "$DROPIN"; then rollback_apply; exit 1; fi
+while IFS='=' read -r key target; do if ! sysctl -w "$key=$target" >/dev/null 2>&1 || [ "$(getv "${key//./\/}")" != "$target" ]; then printf '应用失败：%s，开始回滚。\n' "$key" >&2; rollback_apply; exit 1; fi; done < "$TMP/changes"
+printf '应用完成：%s 项已验证。备份目录：%s\n' "$changes" "$BACKUP"
+printf '如需回滚：sudo %s --rollback %s\n' "$0" "$BACKUP"
